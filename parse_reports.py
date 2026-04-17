@@ -3,8 +3,13 @@
 MD转Excel解析器 - 用于PGT-M胚胎植入前遗传学检测报告
 将MD格式的报告解析并写入Excel表格
 
+功能说明:
+    1. 跳过预实验报告（包含`_PGTMF_`的文件）
+    2. 提取目标变异/SNP分型一致性到U列，值包括：一致、不一致、不一致（位点扩增ADO）
+
 用法:
-    python parse_reports.py
+    python parse_reports.py [-i <md文件夹>] [-o <输出excel>]
+    python parse_reports.py -i D:\md2excel\md_output -o D:\md2excel\Info.xlsx
 
 依赖:
     pip install openpyxl
@@ -44,7 +49,16 @@ def extract_age_from_line(line):
 
 
 def extract_target_mutation_results(content):
-    """提取目标变异检测结果 - 返回 (mutation_results, snp_results, target_gene)"""
+    """提取目标变异检测结果 - 返回 (mutation_results, snp_results, target_gene)
+
+    SNP分型一致性(snp_consistency)可能的值:
+        - 一致
+        - 不一致
+        - 不一致（位点扩增ADO）
+        - 不一致（位点扩增）
+        - 不一致（检测异常）
+        - 不一致（母源/父源污染等原因）
+    """
     mutation_results = {}
     snp_results = {}
     target_gene = ""
@@ -115,9 +129,14 @@ def extract_target_mutation_results(content):
                             "不一致",
                             "不一致（位点扩增ADO）",
                             "不一致（位点扩增）",
+                            "不一致（检测异常）",
                         ]:
                             snp_consistency = p
                             break
+                        # 处理空白或"-"的情况（染色体交换重组、母源污染等导致无法判断）
+                        if p == "-" or p == "—" or p == "":
+                            if snp_consistency == "":
+                                snp_consistency = "不一致"
                     mutation_results[sample_id] = (mutation1, "")
                     snp_results[sample_id] = snp_consistency
                     continue
@@ -157,20 +176,119 @@ def extract_target_mutation_results(content):
 
 
 def find_mutation_and_snp_by_partial_id(embryo_id, mutation_results, snp_results):
-    """根据胚胎ID在mutation_results和snp_results中查找匹配"""
-    clean_id = embryo_id.replace(" ", "").replace("_", "")
+    """根据胚胎ID在mutation_results和snp_results中查找匹配
+
+    胚胎ID可能存在格式差异，如:
+        - 胚胎表格: "241228CC Y_E2" (有空格)
+        - SNP表格: "241228CCY_E2" (无空格)
+    匹配时优先精确匹配，失败后使用前缀heuristic匹配。
+    """
+    if not embryo_id:
+        return ("", ""), ""
 
     if embryo_id in mutation_results:
         return mutation_results[embryo_id], snp_results.get(embryo_id, "")
 
+    clean_id = embryo_id.replace(" ", "").replace("_", "")
+
+    # 优先：精确匹配（去除所有空格后匹配）
     for key in mutation_results.keys():
+        if not key:
+            continue
         key_clean = key.replace(" ", "").replace("_", "")
-        if key == embryo_id or key_clean == clean_id:
+        if key_clean == clean_id:
             return mutation_results[key], snp_results.get(key, "")
-        if clean_id and (
-            key.startswith(embryo_id[:8]) or embryo_id.startswith(key[:8])
-        ):
+
+    # 次优：基于数字+前缀的heuristic匹配
+    import re
+
+    embryo_nums = re.findall(r"\d+", embryo_id)
+    if embryo_nums:
+        embryo_first_num = embryo_nums[0]
+        embryo_prefix = re.split(r"\d+", embryo_id)[0] if embryo_id else ""
+
+        for key in mutation_results.keys():
+            if not key:
+                continue
+            key_clean = key.replace(" ", "").replace("_", "")
+            if key_clean == clean_id:
+                continue  # already handled above
+
+            key_nums = re.findall(r"\d+", key)
+            if key_nums and key_nums[0] == embryo_first_num:
+                key_prefix = re.split(r"\d+", key)[0] if key else ""
+                if embryo_prefix and key_prefix:
+                    if (
+                        embryo_prefix in key
+                        or key in embryo_prefix
+                        or (
+                            len(embryo_prefix) >= 2
+                            and len(key_prefix) >= 2
+                            and embryo_prefix[:2] == key_prefix[:2]
+                        )
+                    ):
+                        return mutation_results[key], snp_results.get(key, "")
+
+    # 最后：基于前缀的匹配（8字符起始）
+    if clean_id and len(clean_id) >= 8:
+        for key in mutation_results.keys():
+            if not key:
+                continue
+            key_clean = key.replace(" ", "").replace("_", "")
+            if key_clean == clean_id:
+                continue
+            if key.startswith(embryo_id[:8]) or embryo_id.startswith(key[:8]):
+                return mutation_results[key], snp_results.get(key, "")
+
+    return ("", ""), ""
+
+    # 尝试精确匹配
+    if embryo_id in mutation_results:
+        return mutation_results[embryo_id], snp_results.get(embryo_id, "")
+
+    # 规范化：去除所有空格
+    clean_id = embryo_id.replace(" ", "").replace("_", "")
+
+    # 遍历查找最佳匹配
+    for key in mutation_results.keys():
+        if not key:
+            continue
+        key_clean = key.replace(" ", "").replace("_", "")
+
+        # 完全去除空格后匹配
+        if key_clean == clean_id:
             return mutation_results[key], snp_results.get(key, "")
+
+        # 提取数字部分进行匹配（处理 "241228CC Y_E2" 匹配 "241228CCY_E2" 的情况）
+        import re
+
+        embryo_nums = re.findall(r"\d+", embryo_id)
+        key_nums = re.findall(r"\d+", key)
+        if embryo_nums and key_nums:
+            # 如果数字部分匹配且前缀/后缀有重叠
+            if embryo_nums[0] == key_nums[0]:  # 第一个数字串相同（如241228CC）
+                embryo_prefix = (
+                    re.split(r"\d+", embryo_id)[0]
+                    if re.split(r"\d+", embryo_id)
+                    else ""
+                )
+                key_prefix = re.split(r"\d+", key)[0] if re.split(r"\d+", key) else ""
+                # 前缀相似（如CC, CCY）
+                if embryo_prefix and key_prefix:
+                    # 检查是否一个包含另一个或相似
+                    if (
+                        embryo_prefix in key
+                        or key in embryo_prefix
+                        or embryo_prefix[:2] == key_prefix[:2]
+                        if len(embryo_prefix) > 1 and len(key_prefix) > 1
+                        else False
+                    ):
+                        return mutation_results[key], snp_results.get(key, "")
+
+        # 基于前缀的匹配（8字符起始）
+        if clean_id and len(clean_id) >= 8:
+            if key.startswith(embryo_id[:8]) or embryo_id.startswith(key[:8]):
+                return mutation_results[key], snp_results.get(key, "")
 
     return ("", ""), ""
 
@@ -591,13 +709,17 @@ def parse_md_file(filepath, patient_name):
 
 
 def get_all_md_files(md_folder):
-    """获取md_folder下所有md文件，自动匹配患者名"""
+    """获取md_folder下所有md文件，自动匹配患者名
+
+    跳过规则:
+        - 预实验报告（文件名包含`_PGTMF_`或`PGTMF_`）
+    """
     md_folder = Path(md_folder)
     md_files = list(md_folder.glob("*.md"))
 
     file_mapping = []
     for md_file in md_files:
-        # 跳过预实验报告
+        # 跳过预实验报告（包含_PGTMF_的文件）
         if "_PGTMF_" in md_file.name or "PGTMF_" in md_file.name:
             continue
         # 提取患者名（去掉后缀）
