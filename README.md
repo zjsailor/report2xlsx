@@ -78,7 +78,7 @@ python parse_reports.py -i D:/md2excel/md_output -o D:/md2excel/Info.xlsx
 
 - 跳过预实验报告（包含 `_PGTMF_` 的文件）
 - 样本名称格式多样，自动识别胚胎编号
-- 万婷等特殊格式报告已做兼容处理
+- wangting等特殊格式报告已做兼容处理
 
 ## License
 
