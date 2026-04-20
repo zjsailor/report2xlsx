@@ -748,6 +748,16 @@ def get_all_md_files(md_folder):
     return file_mapping
 
 
+def get_existing_barcodes(ws):
+    """获取Excel中已有的送检条码集合"""
+    existing_barcodes = set()
+    for row in range(2, ws.max_row + 1):
+        barcode = ws.cell(row, 3).value  # 送检条码在第3列
+        if barcode:
+            existing_barcodes.add(str(barcode).strip())
+    return existing_barcodes
+
+
 def main():
     import argparse
 
@@ -766,23 +776,39 @@ def main():
         default=r"D:\md2excel\Info.xlsx",
         help="输出Excel文件路径 (默认: D:\\md2excel\\Info.xlsx)",
     )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["overwrite", "append"],
+        default="overwrite",
+        help="写入模式: overwrite=覆盖(默认), append=追加",
+    )
     args = parser.parse_args()
 
     md_folder = args.input
     excel_path = args.output
+    mode = args.mode
 
     # 获取所有MD文件
     files_to_process = get_all_md_files(md_folder)
     print(f"找到 {len(files_to_process)} 个MD文件")
+    print(f"写入模式: {'追加' if mode == 'append' else '覆盖'}")
 
     # 检查Excel文件是否存在
     if os.path.exists(excel_path):
-        # 加载现有Excel并重置（删除除表头外的所有行）
         wb = openpyxl.load_workbook(excel_path)
         ws = wb.active
-        if ws.max_row > 1:
-            ws.delete_rows(2, ws.max_row - 1)
-        print(f"已重置Excel，保留表头")
+
+        if mode == "overwrite":
+            # 覆盖模式：删除除表头外的所有行
+            if ws.max_row > 1:
+                ws.delete_rows(2, ws.max_row - 1)
+            print(f"已重置Excel，保留表头")
+            existing_barcodes = set()
+        else:
+            # 追加模式：获取已有的送检条码
+            existing_barcodes = get_existing_barcodes(ws)
+            print(f"已有 {len(existing_barcodes)} 条记录，将跳过重复项")
     else:
         # 创建新Excel并添加表头
         wb = openpyxl.Workbook()
@@ -812,8 +838,10 @@ def main():
         ]
         ws.append(headers)
         print(f"创建新Excel，已添加表头")
+        existing_barcodes = set()
 
-    processed_patients = set()
+    new_rows_count = 0
+    skipped_rows_count = 0
 
     for filename, patient_name in files_to_process:
         print(f"\n处理: {filename}...")
@@ -823,15 +851,18 @@ def main():
             print(f"  女性: {data['female_name']}, 男性: {data['male_name']}")
             print(f"  女年龄: {data['female_age']}, 男年龄: {data['male_age']}")
             print(f"  收样日期: {data['sample_date']}")
+            print(f"  送检条码: {data['sample_barcode']}")
             print(f"  疾病: {data['disease'][:50] if data['disease'] else 'N/A'}...")
             print(f"  基因: {data['gene']}, 突变: {data['mutation1']}")
             print(f"  发现 {len(data['embryos'])} 个胚胎")
 
-            # 跳过已处理过的患者
-            if data["female_name"] in processed_patients:
-                print(f"  跳过（已处理）: {data['female_name']}")
-                continue
-            processed_patients.add(data["female_name"])
+            # 追加模式：用送检条码判断是否已处理
+            if mode == "append" and data["sample_barcode"]:
+                barcode = str(data["sample_barcode"]).strip()
+                if barcode in existing_barcodes:
+                    print(f"  跳过（送检条码已存在）: {barcode}")
+                    skipped_rows_count += len(data["embryos"])
+                    continue
 
             for embryo in data["embryos"]:
                 row_data = [
@@ -853,13 +884,12 @@ def main():
                     embryo["cnv_explain"],  # Col 16
                     embryo["aneuploidy"],  # Col 17
                     embryo["carrier_status"],  # Col 18
-                    embryo.get("mutation_detection1", ""),  # Col 19 - 目标变异检测结果1
-                    embryo.get("mutation_detection2", ""),  # Col 20 - 目标变异检测结果2
-                    embryo.get(
-                        "snp_consistency", ""
-                    ),  # Col 21 - 目标变异/SNP分型一致性
+                    embryo.get("mutation_detection1", ""),  # Col 19
+                    embryo.get("mutation_detection2", ""),  # Col 20
+                    embryo.get("snp_consistency", ""),  # Col 21
                 ]
                 ws.append(row_data)
+                new_rows_count += 1
 
         except Exception as e:
             print(f"  错误: {e}")
@@ -868,7 +898,10 @@ def main():
             traceback.print_exc()
 
     wb.save(excel_path)
-    print(f"\n最终: {ws.max_row} 行已保存到 {excel_path}")
+    print(
+        f"\n最终: {ws.max_row} 行 (新增 {new_rows_count} 行, 跳过 {skipped_rows_count} 行)"
+    )
+    print(f"已保存到 {excel_path}")
 
 
 if __name__ == "__main__":
