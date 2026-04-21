@@ -94,7 +94,8 @@ python fix_all_dual_gene.py -i D:/md2excel/markdown -o D:/md2excel/Info100smp.xl
 | 一致 | 一致 |
 | 不一致（位点扩增ADO） | 不一致（位点扩增ADO） |
 | 不一致（检测异常） | 不一致（检测异常） |
-| - (横杠/空白) | 不一致 |
+| - (横杠) | - |
+| 空白 | 空白 |
 
 ## 注意事项
 

@@ -73,7 +73,7 @@ def extract_snp_from_md(filepath):
                     elif '一致' in last:
                         snp_results[embryo][current_gene] = '一致'
                     elif last == '-' or last == '—':
-                        snp_results[embryo][current_gene] = '不一致'
+                        snp_results[embryo][current_gene] = '-'
             continue
 
         if '|' in stripped:
@@ -98,7 +98,7 @@ def extract_snp_from_md(filepath):
                             snp_results[embryo][current_gene] = '一致'
                             break
                         elif p == '-' or p == '—':
-                            snp_results[embryo][current_gene] = '不一致'
+                            snp_results[embryo][current_gene] = '-'
                             break
 
     return genes, snp_results
